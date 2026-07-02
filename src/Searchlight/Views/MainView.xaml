@@ -1,0 +1,425 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Searchlight.Views.MainView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:conv="using:Searchlight.Converters"
+    xmlns:models="using:Searchlight.Models"
+    mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:StringToVisibilityConverter x:Key="StringToVis" />
+        <conv:StringOrDashConverter x:Key="StringOrDash" />
+        <conv:FriendlyDateConverter x:Key="FriendlyDate" />
+    </UserControl.Resources>
+
+    <Grid x:Name="RootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Custom title bar (drag region). The default system title bar is removed
+             via ExtendsContentIntoTitleBar in MainWindow, so this dark strip fills
+             that space and carries the single app label. Right padding reserves room
+             for the min/max/close caption buttons that overlay the top-right. -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="40" Padding="16,0,150,0">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <!-- UAC shield: shown only when the app runs elevated, like Windows Terminal.
+                     Placed at the far left (before the app icon), drawn white to stay subtle.
+                     OneTime x:Bind — elevation is fixed for the process lifetime. -->
+                <FontIcon Glyph="&#xEA18;" FontSize="14" Foreground="White"
+                          VerticalAlignment="Center"
+                          ToolTipService.ToolTip="Running as administrator"
+                          Visibility="{x:Bind IsElevated, Converter={StaticResource BoolToVis}}" />
+                <Image Source="{x:Bind AppIconSource}" Width="18" Height="18"
+                       VerticalAlignment="Center" />
+                <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                           VerticalAlignment="Center">
+                    <Run Text="Searchlight" />
+                    <Run Text="   Historical Session Viewer"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         FontWeight="Normal" />
+                </TextBlock>
+            </StackPanel>
+
+            <!-- Settings gear, right-aligned but left of the caption buttons (reserved
+                 by the 150px right padding). Opens a flyout with the resume behavior toggle. -->
+            <Button HorizontalAlignment="Right" VerticalAlignment="Center"
+                    Background="Transparent" BorderThickness="0"
+                    Padding="8" ToolTipService.ToolTip="Settings">
+                <FontIcon Glyph="&#xE713;" FontSize="16" />
+                <Button.Flyout>
+                    <Flyout>
+                        <StackPanel Width="320" Spacing="8">
+                            <TextBlock Text="Settings"
+                                       Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="Reuse my existing terminal window"
+                                       Style="{StaticResource BodyStrongTextBlockStyle}"
+                                       TextWrapping="Wrap" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="When on, resuming a session opens a new tab in your most-recently-used Windows Terminal window (a new one is created only if none is open). When off, each resume opens its own new window." />
+                            <ToggleSwitch MinWidth="0"
+                                          OnContent="On" OffContent="Off"
+                                          IsOn="{x:Bind ViewModel.Settings.Current.UseSharedTerminalWindow, Mode=TwoWay}" />
+
+                            <!-- Elevation opt-in. Needed when the user's main Terminal
+                                 runs as Admin: matching integrity level lets `wt -w`
+                                 reuse that window. Flipping on relaunches elevated. -->
+                            <TextBlock Text="Run as administrator"
+                                       Style="{StaticResource BodyStrongTextBlockStyle}"
+                                       TextWrapping="Wrap" Margin="0,8,0,0" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Turn on if your main Terminal runs as Administrator. The app restarts elevated (one UAC prompt) so resumed tabs can share your Admin Terminal window. Turning off applies on the next launch." />
+                            <ToggleSwitch MinWidth="0"
+                                          OnContent="On" OffContent="Off"
+                                          IsOn="{x:Bind ViewModel.Settings.Current.RunElevated, Mode=TwoWay}" />
+
+                            <!-- Yolo opt-in. Appends the yolo flag to resume so the
+                                 resumed session auto-approves all tool actions. -->
+                            <TextBlock Text="Resume with --yolo"
+                                       Style="{StaticResource BodyStrongTextBlockStyle}"
+                                       TextWrapping="Wrap" Margin="0,8,0,0" />
+                            <TextBlock TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="When on, resuming a session appends --yolo so it runs with all tool approvals auto-granted (no per-action confirmation). Off by default." />
+                            <ToggleSwitch MinWidth="0"
+                                          OnContent="On" OffContent="Off"
+                                          IsOn="{x:Bind ViewModel.Settings.Current.AppendYolo, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Flyout>
+                </Button.Flyout>
+            </Button>
+        </Grid>
+
+        <!-- Search + refresh -->
+        <Grid Grid.Row="1" Padding="16,4,16,8" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBox Grid.Column="0"
+                     PlaceholderText="Search name, id, folder, branch, prompt…"
+                     Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     VerticalAlignment="Center"
+                     HorizontalAlignment="Stretch" />
+
+            <ProgressRing Grid.Column="1"
+                          IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                          Width="20" Height="20"
+                          VerticalAlignment="Center" />
+
+            <Button Grid.Column="2"
+                    Command="{x:Bind ViewModel.RefreshCommand}"
+                    VerticalAlignment="Center"
+                    ToolTipService.ToolTip="Refresh">
+                <FontIcon Glyph="&#xE72C;" FontSize="16" />
+            </Button>
+        </Grid>
+
+        <!-- Body: list (left) + details (right) -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="380" MinWidth="300" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" MinWidth="360" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Session list -->
+            <ListView Grid.Column="0"
+                      x:Name="SessionList"
+                      SelectedItem="{x:Bind ViewModel.SelectedSession, Mode=TwoWay}"
+                      SelectionMode="Single"
+                      DoubleTapped="OnSessionDoubleTapped"
+                      Padding="8,0,8,8">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="12,10" />
+                        <Setter Property="Margin" Value="0,2" />
+                        <Setter Property="CornerRadius" Value="6" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="models:SessionInfo">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Spacing="2">
+                                <TextBlock Text="{x:Bind DisplayName}"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind Cwd, Converter={StaticResource StringOrDash}}"
+                                           FontSize="12"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           TextTrimming="CharacterEllipsis"
+                                           MaxLines="1" />
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{x:Bind Branch, Converter={StaticResource StringOrDash}}"
+                                               FontSize="11"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                               TextTrimming="CharacterEllipsis"
+                                               MaxLines="1" />
+                                    <TextBlock Text="•"
+                                               FontSize="11"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                    <TextBlock Text="{x:Bind UpdatedAt, Converter={StaticResource FriendlyDate}}"
+                                               FontSize="11"
+                                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Top">
+                                <Border Background="{ThemeResource SystemFillColorSuccessBackgroundBrush}"
+                                        CornerRadius="4" Padding="6,2"
+                                        Visibility="{x:Bind IsInUse, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="In use" FontSize="10"
+                                               Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                                </Border>
+                                <!-- Client badges: distinguished by SHAPE (filled vs outlined)
+                                     + GLYPH + TEXT, not color alone, so they stay legible without
+                                     color perception. CLI = filled + command-prompt glyph;
+                                     App = outlined + apps glyph. -->
+                                <Border Background="#4A5BD6"
+                                        CornerRadius="4" Padding="6,2"
+                                        Visibility="{x:Bind IsCliClient, Converter={StaticResource BoolToVis}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                        <FontIcon Glyph="&#xE756;" FontSize="10" Foreground="White" />
+                                        <TextBlock Text="CLI" FontSize="10" Foreground="White" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="Transparent" BorderThickness="1" BorderBrush="#3AC0D4"
+                                        CornerRadius="4" Padding="6,2"
+                                        Visibility="{x:Bind IsAppClient, Converter={StaticResource BoolToVis}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                        <FontIcon Glyph="&#xE71D;" FontSize="10" Foreground="#3AC0D4" />
+                                        <TextBlock Text="App" FontSize="10" Foreground="#3AC0D4" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                        CornerRadius="4" Padding="6,2">
+                                    <TextBlock Text="{x:Bind Kind}" FontSize="10"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                <ListView.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate x:DataType="models:SessionGroup">
+                                <Border Padding="4,12,4,4">
+                                    <TextBlock Text="{x:Bind Key}"
+                                               FontWeight="SemiBold"
+                                               FontSize="12"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Border>
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListView.GroupStyle>
+            </ListView>
+
+            <!-- Divider -->
+            <Border Grid.Column="1" Width="1"
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+            <!-- Details pane -->
+            <Grid Grid.Column="2">
+                <!-- Empty state -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8"
+                            Visibility="{x:Bind ViewModel.Details.HasSession, Mode=OneWay, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                    <FontIcon Glyph="&#xE7C3;" FontSize="40"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <TextBlock Text="Select a session"
+                               Style="{StaticResource BodyStrongTextBlockStyle}"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="Details, checkpoints, snapshots, and todos appear here."
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center" TextAlignment="Center" />
+                </StackPanel>
+
+                <!-- Details content: pinned header + scrolling body -->
+                <Grid Visibility="{x:Bind ViewModel.Details.HasSession, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Pinned title + Resume (stays visible while body scrolls) -->
+                    <Grid Grid.Row="0" ColumnSpacing="12" Padding="20,16,20,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="{x:Bind ViewModel.Details.Session.DisplayName, Mode=OneWay}"
+                                       Style="{StaticResource TitleTextBlockStyle}"
+                                       TextTrimming="CharacterEllipsis" MaxLines="2" />
+                            <TextBlock Text="{x:Bind ViewModel.Details.Session.Id, Mode=OneWay}"
+                                       FontFamily="Consolas" FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       IsTextSelectionEnabled="True" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Command="{x:Bind ViewModel.Details.ResumeCommand}"
+                                VerticalAlignment="Top">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon Glyph="&#xE768;" FontSize="14" />
+                                <TextBlock Text="Resume" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" Padding="20,0,20,16">
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="{x:Bind ViewModel.Details.StatusMessage, Mode=OneWay}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Visibility="{x:Bind ViewModel.Details.StatusMessage, Mode=OneWay, Converter={StaticResource StringToVis}}" />
+
+                        <!-- Fields -->
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="16">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnSpacing="16" RowSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Folder" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.Cwd, Mode=OneWay, Converter={StaticResource StringOrDash}}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Branch" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.Branch, Mode=OneWay, Converter={StaticResource StringOrDash}}" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Model" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.Model, Mode=OneWay, Converter={StaticResource StringOrDash}}" />
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Reasoning" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.ReasoningEffort, Mode=OneWay, Converter={StaticResource StringOrDash}}" />
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Version" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.CopilotVersion, Mode=OneWay, Converter={StaticResource StringOrDash}}" />
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Updated" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.UpdatedAt, Mode=OneWay, Converter={StaticResource FriendlyDate}}" />
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="First prompt" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.FirstPromptPreview, Mode=OneWay, Converter={StaticResource StringOrDash}}" TextWrapping="Wrap" MaxLines="24" TextTrimming="CharacterEllipsis" />
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Client" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Row="7" Grid.Column="1" Text="{x:Bind ViewModel.Details.Session.ClientNameRaw, Mode=OneWay}" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Checkpoints -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Checkpoints" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.Details.Checkpoints}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:CheckpointInfo">
+                                        <Grid ColumnSpacing="10" Padding="0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0" Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4" Padding="6,2" VerticalAlignment="Top">
+                                                <TextBlock Text="{x:Bind Number}" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </Border>
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Title, Converter={StaticResource StringOrDash}}" TextWrapping="Wrap" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="No checkpoints." FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                       Visibility="{x:Bind ViewModel.Details.Session.HasCheckpoints, Mode=OneWay, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                        </StackPanel>
+
+                        <!-- Snapshots -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Status snapshots" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.Details.Snapshots}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:SnapshotInfo">
+                                        <Grid ColumnSpacing="10" Padding="0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{x:Bind Timestamp, Converter={StaticResource FriendlyDate}}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind SourceTrigger, Converter={StaticResource StringOrDash}}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- Todos -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Todos" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.Details.Todos}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="models:SessionTodo">
+                                        <Grid ColumnSpacing="10" Padding="0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="90" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0" Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4" Padding="6,2" VerticalAlignment="Top" HorizontalAlignment="Left">
+                                                <TextBlock Text="{x:Bind Status}" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </Border>
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Title}" TextWrapping="Wrap" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <!-- Status bar -->
+        <Border Grid.Row="3" Padding="16,8"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="{x:Bind ViewModel.VisibleCount, Mode=OneWay}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                <TextBlock Text="of" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                <TextBlock Text="{x:Bind ViewModel.TotalCount, Mode=OneWay}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                <TextBlock Text="sessions" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>
