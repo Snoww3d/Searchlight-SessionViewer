@@ -24,6 +24,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private bool _watcherHooked;
     private bool _suppressSelectionSideEffects;
 
+    // Fixed "visible + buffer" window enriched synchronously before the first paint.
+    // A generous proxy for the on-screen rows (not viewport-measured); the rest fill
+    // in asynchronously. Monotonic generation cancels stale background enrichment when
+    // a newer load/refresh starts.
+    private const int EagerEnrichCount = 60;
+    private int _loadGeneration;
+
     /// <summary>Creates the main view-model with its services and UI dispatcher.</summary>
     public MainViewModel(
         ISessionDataSource dataSource,
@@ -84,26 +91,50 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSearchTextChanged(string value) => ApplyFilter();
 
     /// <summary>
-    /// Loads all sessions (thread-pool) then publishes them on the UI thread.
-    /// Also wires the live-refresh watcher on first call.
+    /// Two-phase load. Phase 1 (blocking, fast): read cheap folder facts for every
+    /// session, eagerly enrich the newest <see cref="EagerEnrichCount"/> window, and
+    /// publish immediately so the first screenful renders fully. Phase 2 (background):
+    /// enrich the remaining sessions in recency order, yielding periodically and
+    /// updating each row in place on the UI thread. A generation guard cancels an
+    /// in-flight Phase 2 when a newer load/refresh starts. Also wires the watcher.
     /// </summary>
     [RelayCommand]
     private async Task LoadAsync()
     {
         CoreLog.Write("LoadAsync: start");
+        int generation = ++_loadGeneration;
         IsLoading = true;
         try
         {
-            IReadOnlyList<SessionInfo> loaded =
-                await Task.Run(() => _dataSource.LoadAll()).ConfigureAwait(true);
+            // Phase 1a: cheap placeholders (folder facts only) — fast blocking pass.
+            IReadOnlyList<SessionInfo> cheap =
+                await Task.Run(() => _dataSource.LoadCheap()).ConfigureAwait(true);
 
-            CoreLog.Write($"LoadAsync: data source returned {loaded.Count} sessions");
+            CoreLog.Write($"LoadAsync: data source returned {cheap.Count} sessions (cheap)");
+
+            // Phase 1b: eagerly enrich the newest window so the first screenful is
+            // fully populated before we publish.
+            List<SessionInfo> initial = [.. cheap];
+            int eager = Math.Min(EagerEnrichCount, initial.Count);
+            await Task.Run(() =>
+            {
+                for (int i = 0; i < eager; i++)
+                {
+                    initial[i] = _dataSource.EnrichOne(initial[i]);
+                }
+            }).ConfigureAwait(true);
 
             _all.Clear();
-            _all.AddRange(loaded);
+            _all.AddRange(initial);
             TotalCount = _all.Count;
             ApplyFilter();
-            CoreLog.Write($"LoadAsync: published {VisibleCount} rows in {SessionGroups.Count} groups (total {TotalCount})");
+            CoreLog.Write($"LoadAsync: published {VisibleCount} rows in {SessionGroups.Count} groups (total {TotalCount}, eager {eager})");
+
+            // Phase 2: enrich the rest in the background, updating rows in place.
+            if (initial.Count > eager)
+            {
+                EnrichRemainingInBackground(generation, eager);
+            }
         }
         catch (Exception ex)
         {
@@ -115,6 +146,118 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         HookWatcher();
+    }
+
+    /// <summary>
+    /// Enriches sessions beyond the eager window on a background thread, in recency
+    /// order, marshaling each completed row back to the UI thread. Yields between
+    /// batches so posted row updates render progressively rather than in one burst.
+    /// Bails out as soon as a newer load supersedes this <paramref name="generation"/>.
+    /// </summary>
+    private void EnrichRemainingInBackground(int generation, int startIndex)
+    {
+        // Snapshot the pending placeholders on the UI thread before going async.
+        List<SessionInfo> pending = [.. _all.Skip(startIndex)];
+
+        _ = Task.Run(async () =>
+        {
+            const int BatchSize = 20;
+            int done = 0;
+            try
+            {
+                foreach (SessionInfo placeholder in pending)
+                {
+                    if (generation != _loadGeneration)
+                    {
+                        return;
+                    }
+
+                    SessionInfo enriched = _dataSource.EnrichOne(placeholder);
+                    _dispatcher.Post(() =>
+                    {
+                        if (generation == _loadGeneration)
+                        {
+                            ReplaceRow(enriched);
+                        }
+                    });
+
+                    if (++done % BatchSize == 0)
+                    {
+                        await Task.Yield();
+                    }
+                }
+
+                CoreLog.Write($"LoadAsync: background enrichment complete ({done} rows)");
+
+                // Phase 1 grouped the older rows by folder mtime (the cheap sort key),
+                // which can be bulk-touched and wildly diverge from workspace updated_at.
+                // Now that every row carries its real updated_at, recompute the groups
+                // once so day/week/month buckets are accurate. Guarded by generation so
+                // a newer load (Refresh) doesn't get clobbered by this late recompute.
+                _dispatcher.Post(() =>
+                {
+                    if (generation == _loadGeneration)
+                    {
+                        ApplyFilter();
+                        CoreLog.Write($"LoadAsync: regrouped after enrichment ({SessionGroups.Count} groups)");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                CoreLog.Write($"LoadAsync: background enrichment EXCEPTION {ex}");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Replaces a placeholder row with its enriched copy in place — both in the
+    /// backing list and in its visible group — without re-sorting or regrouping, so
+    /// ordering stays stable while off-screen rows fill in. Refreshes the details
+    /// pane if the enriched row is the current selection.
+    /// </summary>
+    private void ReplaceRow(SessionInfo enriched)
+    {
+        for (int i = 0; i < _all.Count; i++)
+        {
+            if (_all[i].Id == enriched.Id)
+            {
+                _all[i] = enriched;
+                break;
+            }
+        }
+
+        foreach (SessionGroup group in SessionGroups)
+        {
+            for (int i = 0; i < group.Count; i++)
+            {
+                if (group[i].Id == enriched.Id)
+                {
+                    bool isSelected = SelectedSession?.Id == enriched.Id;
+
+                    _suppressSelectionSideEffects = true;
+                    try
+                    {
+                        group[i] = enriched;
+                        if (isSelected)
+                        {
+                            SelectedSession = enriched;
+                        }
+                    }
+                    finally
+                    {
+                        _suppressSelectionSideEffects = false;
+                    }
+
+                    if (isSelected)
+                    {
+                        Details.Load(enriched);
+                    }
+
+                    return;
+                }
+            }
+        }
     }
 
     /// <summary>Re-runs <see cref="LoadAsync"/> to pick up on-disk changes.</summary>
