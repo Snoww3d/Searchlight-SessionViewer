@@ -106,6 +106,11 @@ same Core library, backed by **either or both** session stores:
   Copilot — in Terminal.app on macOS, `x-terminal-emulator` on Linux, a new `cmd` window on
   Windows.
 - **Read-only by design** — never writes to `~/.claude` or `~/.copilot`.
+- **Tray + single instance** — like the WinUI host: minimize/close hide to the
+  tray (menu-bar icon on macOS), the tray menu shows/exits, and launching a
+  second copy surfaces the running window instead. Opt out with `--no-tray`.
+  On Linux, close/minimize keep their normal meaning (not every desktop has a
+  tray host to restore from); the tray icon still appears where one exists.
 
 ```bash
 # Run the unit tests (any OS)
@@ -124,6 +129,18 @@ dotnet run --project src/Searchlight.Avalonia -- --demo
 
 Building `Searchlight.slnx` as a whole still requires Windows (the WinUI host); on macOS/Linux
 build the individual projects above.
+
+To install without dev tools on macOS/Linux — the counterpart of `tools/install.ps1`:
+
+```bash
+# Install: self-contained publish + app launcher + run-at-login
+tools/install.sh
+
+# Uninstall, skip run-at-login, or reuse the last publish
+tools/install.sh --uninstall
+tools/install.sh --no-startup
+tools/install.sh --skip-publish
+```
 
 ## Documentation
 

@@ -29,4 +29,9 @@
     <ProjectReference Include="..\Searchlight.Core\Searchlight.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Window/tray icons, shared with the WinUI host's Assets. -->
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
 </Project>

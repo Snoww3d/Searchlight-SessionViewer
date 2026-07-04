@@ -4,6 +4,7 @@
         xmlns:local="clr-namespace:Searchlight.Avalonia"
         x:Class="Searchlight.Avalonia.MainWindow"
         Title="Searchlight — Historical Session Viewer"
+        Icon="/Assets/app_32.png"
         Width="1150" Height="740"
         MinWidth="760" MinHeight="440">
 
@@ -40,11 +41,43 @@
       </Button>
     </Grid>
 
-    <!-- Body: list (left) + divider + details (right) -->
-    <Grid Grid.Row="1" ColumnDefinitions="380,Auto,*">
+    <!-- Body: tick rail + list (left) + divider + details (right) -->
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,380,Auto,*">
 
-      <ListBox Grid.Column="0" x:Name="SessionList"
+      <!-- Compact tick rail: an always-visible column of short group labels
+           that acts like a second scrollbar — clicking a tick jumps the list
+           straight to that group. Pinned to the far-left edge (col 0). -->
+      <ScrollViewer Grid.Column="0"
+                    VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled"
+                    Padding="2,0,2,8"
+                    Background="#18808080">
+        <ItemsControl ItemsSource="{Binding SessionGroups}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="models:SessionGroup">
+              <Button Click="OnRailTickClick"
+                      Tag="{Binding}"
+                      Background="Transparent"
+                      BorderThickness="0"
+                      Padding="6,4"
+                      Margin="0,1"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center"
+                      ToolTip.Tip="{Binding Key}">
+                <TextBlock Text="{Binding ShortKey}" FontSize="11" Opacity="0.7" />
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+
+      <!-- Session list. FlowDirection is flipped to RightToLeft so the vertical
+           scrollbar renders on the list's LEFT edge (next to the tick rail, away
+           from the details pane). The item and header templates restore
+           LeftToRight so their content still reads normally. -->
+      <ListBox Grid.Column="1" x:Name="SessionList"
                Margin="8,0,8,8"
+               FlowDirection="RightToLeft"
                SelectionChanged="OnSessionSelectionChanged"
                DoubleTapped="OnSessionDoubleTapped">
         <ListBox.Styles>
@@ -58,12 +91,13 @@
 
           <DataTemplate DataType="local:HeaderItem">
             <TextBlock Text="{Binding Title}"
+                       FlowDirection="LeftToRight"
                        FontSize="12" FontWeight="SemiBold" Opacity="0.6"
                        Margin="0,6,0,0" />
           </DataTemplate>
 
           <DataTemplate DataType="models:SessionInfo">
-            <Grid ColumnDefinitions="*,Auto">
+            <Grid ColumnDefinitions="*,Auto" FlowDirection="LeftToRight">
               <StackPanel Grid.Column="0" Spacing="2" Margin="0,0,8,0">
                 <TextBlock Text="{Binding DisplayName}"
                            FontWeight="SemiBold" TextWrapping="Wrap" />
@@ -96,10 +130,10 @@
         </ListBox.DataTemplates>
       </ListBox>
 
-      <Border Grid.Column="1" Width="1" Background="#30808080" />
+      <Border Grid.Column="2" Width="1" Background="#30808080" />
 
       <!-- Details pane -->
-      <Grid Grid.Column="2">
+      <Grid Grid.Column="3">
 
         <!-- Empty state -->
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8"
@@ -143,10 +177,6 @@
 
           <ScrollViewer Grid.Row="1" Margin="20,0,20,16">
             <StackPanel Spacing="16">
-
-              <TextBlock Text="{Binding Details.StatusMessage}"
-                         Opacity="0.7"
-                         IsVisible="{Binding Details.StatusMessage, Converter={x:Static ObjectConverters.IsNotNull}}" />
 
               <!-- Field card -->
               <Border Background="#18808080" BorderBrush="#30808080"
@@ -206,17 +236,27 @@
       </Grid>
     </Grid>
 
-    <!-- Status bar -->
+    <!-- Status bar: session count (left, mirrors the list pane) + most-recent
+         action (right, full text, right-aligned, selectable) -->
     <Border Grid.Row="2" Padding="16,8"
             Background="#18808080" BorderBrush="#30808080" BorderThickness="0,1,0,0">
-      <StackPanel Orientation="Horizontal" Spacing="6">
-        <TextBlock Text="{Binding VisibleCount}" FontSize="12" Opacity="0.7" />
-        <TextBlock Text="of" FontSize="12" Opacity="0.7" />
-        <TextBlock Text="{Binding TotalCount}" FontSize="12" Opacity="0.7" />
-        <TextBlock Text="sessions" FontSize="12" Opacity="0.7" />
-        <TextBlock Text="· loading…" FontSize="12" Opacity="0.7"
-                   IsVisible="{Binding IsLoading}" />
-      </StackPanel>
+      <Grid ColumnDefinitions="Auto,*">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
+                    VerticalAlignment="Center">
+          <TextBlock Text="{Binding VisibleCount}" FontSize="12" Opacity="0.7" />
+          <TextBlock Text="of" FontSize="12" Opacity="0.7" />
+          <TextBlock Text="{Binding TotalCount}" FontSize="12" Opacity="0.7" />
+          <TextBlock Text="sessions" FontSize="12" Opacity="0.7" />
+          <TextBlock Text="· loading…" FontSize="12" Opacity="0.7"
+                     IsVisible="{Binding IsLoading}" />
+        </StackPanel>
+
+        <SelectableTextBlock Grid.Column="1" Margin="12,0,0,0"
+                             Text="{Binding Details.LastActionText}"
+                             FontSize="12" Opacity="0.7"
+                             TextWrapping="Wrap" TextAlignment="Right"
+                             HorizontalAlignment="Right" VerticalAlignment="Center" />
+      </Grid>
     </Border>
   </Grid>
 </Window>
